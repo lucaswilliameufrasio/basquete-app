@@ -1,0 +1,6 @@
+[bindings.kotlin]
+package_name = "com.example.basqueteapp.uniffi"
+android_cleaner = true
+
+[bindings.swift]
+module_name = "BasqueteAppFFI"

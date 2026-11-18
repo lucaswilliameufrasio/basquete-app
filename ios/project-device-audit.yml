@@ -1,0 +1,23 @@
+name: BasqueteAppDeviceAudit
+options:
+  bundleIdPrefix: com.example.basqueteapp
+  deploymentTarget:
+    iOS: "17.0"
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+targets:
+  BasqueteApp:
+    type: application
+    platform: iOS
+    sources:
+      - path: App/Sources
+      - path: Generated
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.example.basqueteapp
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+    dependencies:
+      - framework: ../target/device-audit/basquete_app_ffi.xcframework
+        embed: false

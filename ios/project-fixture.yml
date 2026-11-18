@@ -1,0 +1,58 @@
+name: BasqueteAppFixture
+options:
+  bundleIdPrefix: com.example.basqueteapp
+  deploymentTarget:
+    iOS: "17.0"
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    "CODE_SIGN_IDENTITY[sdk=iphonesimulator*]": "-"
+targets:
+  BasqueteApp:
+    type: application
+    platform: iOS
+    sources:
+      - path: App/Sources
+      - path: ../target/fixture-bindings/swift/BasqueteAppFFI.swift
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.example.basqueteapp
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) BRAZIL_FIXTURE_TEST"
+    dependencies:
+      - framework: ../target/fixture-bindings/basquete_app_ffi.xcframework
+        embed: false
+    preBuildScripts:
+      - name: Restrict fixture to Debug
+        script: |
+          if [ "$CONFIGURATION" != "Debug" ]; then
+            echo "error: fixture project supports Debug only"
+            exit 1
+          fi
+    scheme:
+      testTargets:
+        - BasqueteAppTests
+        - BasqueteAppUITests
+  BasqueteAppTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: App/Tests
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: com.example.basqueteapp.tests
+    dependencies:
+      - target: BasqueteApp
+  BasqueteAppUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: App/UITests
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: com.example.basqueteapp.uitests
+    dependencies:
+      - target: BasqueteApp

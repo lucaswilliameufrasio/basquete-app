@@ -1,0 +1,12 @@
+[package]
+name = "basquete-app-ffi"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+crate-type = ["cdylib", "staticlib", "rlib"]
+name = "basquete_app_ffi"
+
+[dependencies]
+basquete-app-core = { path = "../basquete-app-core" }
+uniffi = { version = "0.32", features = ["cli"] }
