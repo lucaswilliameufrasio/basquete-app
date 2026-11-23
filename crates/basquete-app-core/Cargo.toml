@@ -2,17 +2,18 @@
 name = "basquete-app-core"
 version = "0.1.0"
 edition = "2024"
+license = "Apache-2.0"
 
 [features]
-experimental-brazil-fixtures = ["dep:serde_json", "dep:chrono", "dep:chrono-tz"]
+experimental-brazil-fixtures = ["dep:serde_json", "dep:time", "dep:jiff"]
 experimental-local-http = ["experimental-brazil-fixtures", "dep:ureq"]
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 thiserror = "2"
 serde_json = { version = "1", optional = true }
-chrono = { version = "0.4", default-features = false, features = ["std"], optional = true }
-chrono-tz = { version = "0.9", optional = true }
+jiff = { version = "1.0.1", default-features = false, features = ["std", "tzdb-bundle-always"], optional = true }
+time = { version = "0.3", features = ["parsing", "macros"], optional = true }
 ureq = { version = "3.1", default-features = false, optional = true }
 
 [dev-dependencies]

@@ -1,3 +1,9 @@
+buildscript {
+    configurations.classpath {
+        resolutionStrategy.activateDependencyLocking()
+    }
+}
+
 plugins {
     alias(libs.plugins.android.application) apply false
     // O AGP 9 compila Kotlin nativamente; declarar o plugin aqui só fixa a

@@ -26,5 +26,5 @@ precisam ser compiladas e inspecionadas em um ambiente Apple.
 
 ## Licença
 
-Nenhuma licença de código foi definida ainda. A visibilidade pública do
-repositório, por si só, não concede uma licença de reutilização.
+O código do projeto está disponível sob a [Apache License 2.0](LICENSE).
+Marcas, imagens e dados de terceiros não são licenciados pelo projeto.

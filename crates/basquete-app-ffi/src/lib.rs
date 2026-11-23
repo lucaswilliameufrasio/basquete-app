@@ -114,9 +114,10 @@ impl core::experimental_brazil::Transport for FixtureTransport {
     fn get_page(
         &mut self,
         cursor: Option<&str>,
-    ) -> Result<core::experimental_brazil::Response, ()> {
+    ) -> Result<core::experimental_brazil::Response, core::experimental_brazil::TransportError>
+    {
         if cursor.is_some() {
-            return Err(());
+            return Err(core::experimental_brazil::TransportError);
         }
         Ok(core::experimental_brazil::Response {
             status: 200,

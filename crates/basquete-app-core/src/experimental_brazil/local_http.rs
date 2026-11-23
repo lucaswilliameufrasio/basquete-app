@@ -5,23 +5,23 @@ use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use chrono::{Days, NaiveDate};
+use time::{Date, Duration as DateDuration, OffsetDateTime};
 
-use super::{Response, Transport};
+use super::{Response, Transport, TransportError};
 
 pub struct TournamentQuery {
     tournament_id: u64,
-    from: NaiveDate,
-    to: NaiveDate,
+    from: Date,
+    to: Date,
 }
 
 impl TournamentQuery {
     /// Dates and the supplied current day are UTC; the end is exclusive.
     pub fn new(
         tournament_id: u64,
-        from: NaiveDate,
-        to: NaiveDate,
-        today: NaiveDate,
+        from: Date,
+        to: Date,
+        today: Date,
     ) -> Result<Self, &'static str> {
         let query = Self {
             tournament_id,
@@ -32,15 +32,15 @@ impl TournamentQuery {
         Ok(query)
     }
 
-    fn validate(&self, today: NaiveDate) -> Result<(), &'static str> {
+    fn validate(&self, today: Date) -> Result<(), &'static str> {
         if self.tournament_id == 0 || self.from >= self.to {
             return Err("positive tournament and nonempty UTC date range required");
         }
         let earliest = today
-            .checked_sub_days(Days::new(7))
+            .checked_sub(DateDuration::days(7))
             .ok_or("invalid current day")?;
         let latest = today
-            .checked_add_days(Days::new(30))
+            .checked_add(DateDuration::days(30))
             .ok_or("invalid current day")?;
         if self.from < earliest || self.to > latest {
             return Err("date range outside provider window");
@@ -53,7 +53,7 @@ pub struct LocalHttp {
     agent: ureq::Agent,
     endpoint: String,
     query: TournamentQuery,
-    utc_day: Box<dyn FnMut() -> NaiveDate>,
+    utc_day: Box<dyn FnMut() -> Date>,
     quota: SharedQuota,
     monotonic_now: Box<dyn FnMut() -> Instant>,
 }
@@ -74,16 +74,14 @@ impl LocalHttp {
         timeout: Duration,
         query: TournamentQuery,
     ) -> Result<Self, &'static str> {
-        Self::with_clock(address, timeout, query, || {
-            chrono::DateTime::<chrono::Utc>::from(std::time::SystemTime::now()).date_naive()
-        })
+        Self::with_clock(address, timeout, query, || OffsetDateTime::now_utc().date())
     }
 
     pub fn with_clock(
         address: SocketAddr,
         timeout: Duration,
         query: TournamentQuery,
-        utc_day: impl FnMut() -> NaiveDate + 'static,
+        utc_day: impl FnMut() -> Date + 'static,
     ) -> Result<Self, &'static str> {
         Self::with_shared_quota(
             address,
@@ -99,7 +97,7 @@ impl LocalHttp {
         address: SocketAddr,
         timeout: Duration,
         query: TournamentQuery,
-        utc_day: impl FnMut() -> NaiveDate + 'static,
+        utc_day: impl FnMut() -> Date + 'static,
         quota: SharedQuota,
         monotonic_now: impl FnMut() -> Instant + 'static,
     ) -> Result<Self, &'static str> {
@@ -124,14 +122,14 @@ impl LocalHttp {
 }
 
 impl Transport for LocalHttp {
-    fn get_page(&mut self, cursor: Option<&str>) -> Result<Response, ()> {
+    fn get_page(&mut self, cursor: Option<&str>) -> Result<Response, TransportError> {
         if self.query.validate((self.utc_day)()).is_err() {
-            return Err(());
+            return Err(TransportError);
         }
-        let mut quota = self.quota.0.lock().map_err(|_| ())?;
+        let mut quota = self.quota.0.lock().map_err(|_| TransportError)?;
         let now = (self.monotonic_now)();
         if quota.blocked_indefinitely || quota.blocked_until.is_some_and(|until| now < until) {
-            return Err(());
+            return Err(TransportError);
         }
         quota.blocked_until = None;
         let mut request = self
@@ -143,7 +141,7 @@ impl Transport for LocalHttp {
         if let Some(cursor) = cursor {
             request = request.query("cursor", cursor);
         }
-        let mut response = request.call().map_err(|_| ())?;
+        let mut response = request.call().map_err(|_| TransportError)?;
         let status = response.status().as_u16();
         let retry_after = response
             .headers()
@@ -167,7 +165,7 @@ impl Transport for LocalHttp {
             .as_reader()
             .take(1_048_577)
             .read_to_end(&mut body)
-            .map_err(|_| ())?;
+            .map_err(|_| TransportError)?;
         Ok(Response {
             status,
             retry_after,
@@ -183,22 +181,20 @@ mod tests {
     use std::io::{Read, Write};
     use std::net::{Ipv4Addr, TcpListener};
     use std::thread;
+    use time::macros::date;
 
     fn query() -> TournamentQuery {
         TournamentQuery::new(
             150914,
-            NaiveDate::from_ymd_opt(2026, 11, 16).unwrap(),
-            NaiveDate::from_ymd_opt(2026, 11, 17).unwrap(),
-            NaiveDate::from_ymd_opt(2026, 11, 16).unwrap(),
+            date!(2026 - 11 - 16),
+            date!(2026 - 11 - 17),
+            date!(2026 - 11 - 16),
         )
         .unwrap()
     }
 
     fn local_transport(address: SocketAddr, timeout: Duration) -> LocalHttp {
-        LocalHttp::with_clock(address, timeout, query(), || {
-            NaiveDate::from_ymd_opt(2026, 11, 16).unwrap()
-        })
-        .unwrap()
+        LocalHttp::with_clock(address, timeout, query(), || date!(2026 - 11 - 16)).unwrap()
     }
 
     fn server(response: Vec<u8>, delay: Duration) -> SocketAddr {
@@ -243,14 +239,14 @@ mod tests {
             ] {
                 let (mut stream, _) = listener.accept().unwrap();
                 let mut request = [0u8; 1024];
-                stream.read(&mut request).unwrap();
+                assert!(stream.read(&mut request).unwrap() > 0);
                 stream.write_all(reply.as_bytes()).unwrap();
             }
         });
         let gate = SharedQuota::default();
         let instant = Instant::now();
         let clock = std::rc::Rc::new(std::cell::Cell::new(instant));
-        let day = || NaiveDate::from_ymd_opt(2026, 11, 16).unwrap();
+        let day = || date!(2026 - 11 - 16);
         let first_clock = clock.clone();
         let mut first = LocalHttp::with_shared_quota(
             address,
@@ -303,7 +299,7 @@ mod tests {
         let server = thread::spawn(move || {
             let (mut stream, _) = listener.accept().unwrap();
             let mut request = [0u8; 1024];
-            stream.read(&mut request).unwrap();
+            assert!(stream.read(&mut request).unwrap() > 0);
             let body = r#"{"data":[],"nextCursor":"next"}"#;
             write!(
                 stream,
@@ -314,8 +310,8 @@ mod tests {
             .unwrap();
             sender.send(listener).unwrap();
         });
-        let day = NaiveDate::from_ymd_opt(2026, 11, 16).unwrap();
-        let from = NaiveDate::from_ymd_opt(2026, 11, 9).unwrap();
+        let day = date!(2026 - 11 - 16);
+        let from = date!(2026 - 11 - 09);
         let query = TournamentQuery::new(1, from, day, day).unwrap();
         let mut calls = 0;
         let mut transport =
@@ -324,7 +320,7 @@ mod tests {
                 if calls == 1 {
                     day
                 } else {
-                    day.succ_opt().unwrap()
+                    day.next_day().unwrap()
                 }
             })
             .unwrap();
@@ -448,8 +444,8 @@ mod tests {
 
     #[test]
     fn rejects_invalid_tournament_and_date_range() {
-        let day = NaiveDate::from_ymd_opt(2026, 11, 16).unwrap();
-        let next = NaiveDate::from_ymd_opt(2026, 11, 17).unwrap();
+        let day = date!(2026 - 11 - 16);
+        let next = date!(2026 - 11 - 17);
         assert!(TournamentQuery::new(0, day, next, day).is_err());
         assert!(TournamentQuery::new(1, day, day, day).is_err());
         assert!(TournamentQuery::new(1, next, day, day).is_err());
@@ -457,46 +453,19 @@ mod tests {
 
     #[test]
     fn validates_inclusive_from_and_exclusive_to_window() {
-        let today = NaiveDate::from_ymd_opt(2026, 1, 1).unwrap();
-        let earliest = NaiveDate::from_ymd_opt(2025, 12, 25).unwrap();
-        let latest = NaiveDate::from_ymd_opt(2026, 1, 31).unwrap();
+        let today = date!(2026 - 01 - 01);
+        let earliest = date!(2025 - 12 - 25);
+        let latest = date!(2026 - 01 - 31);
         assert!(TournamentQuery::new(1, earliest, latest, today).is_ok());
-        assert!(
-            TournamentQuery::new(
-                1,
-                NaiveDate::from_ymd_opt(2025, 12, 24).unwrap(),
-                latest,
-                today
-            )
-            .is_err()
-        );
-        assert!(
-            TournamentQuery::new(
-                1,
-                earliest,
-                NaiveDate::from_ymd_opt(2026, 2, 1).unwrap(),
-                today
-            )
-            .is_err()
-        );
+        assert!(TournamentQuery::new(1, date!(2025 - 12 - 24), latest, today).is_err());
+        assert!(TournamentQuery::new(1, earliest, date!(2026 - 02 - 01), today).is_err());
         assert!(TournamentQuery::new(1, latest, latest, today).is_err());
         assert!(
-            TournamentQuery::new(
-                1,
-                NaiveDate::MIN,
-                NaiveDate::MIN.succ_opt().unwrap(),
-                NaiveDate::MIN
-            )
-            .is_err()
+            TournamentQuery::new(1, Date::MIN, Date::MIN.next_day().unwrap(), Date::MIN).is_err()
         );
         assert!(
-            TournamentQuery::new(
-                1,
-                NaiveDate::MAX.pred_opt().unwrap(),
-                NaiveDate::MAX,
-                NaiveDate::MAX
-            )
-            .is_err()
+            TournamentQuery::new(1, Date::MAX.previous_day().unwrap(), Date::MAX, Date::MAX)
+                .is_err()
         );
     }
 }

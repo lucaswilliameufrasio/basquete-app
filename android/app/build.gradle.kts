@@ -3,6 +3,27 @@ plugins {
     alias(libs.plugins.kotlin.compose)
 }
 
+val lockedConfigurations = setOf(
+    "debugCompileClasspath",
+    "debugRuntimeClasspath",
+    "releaseCompileClasspath",
+    "releaseRuntimeClasspath",
+    "debugUnitTestCompileClasspath",
+    "debugUnitTestRuntimeClasspath",
+    "debugAndroidTestCompileClasspath",
+    "debugAndroidTestRuntimeClasspath",
+)
+
+dependencyLocking {
+    lockMode = LockMode.STRICT
+}
+
+configurations.configureEach {
+    if (name in lockedConfigurations) {
+        resolutionStrategy.activateDependencyLocking()
+    }
+}
+
 val brazilFixtureTest = providers.gradleProperty("brazilFixtureTest")
     .map { it == "true" }.orElse(false).get()
 

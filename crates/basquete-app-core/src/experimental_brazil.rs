@@ -1,11 +1,39 @@
 //! Offline experimental page processing. No networking or UI integration.
 
 use std::collections::HashSet;
+use std::sync::OnceLock;
 
-use chrono::{DateTime, NaiveDateTime};
-use chrono_tz::Tz;
+use jiff::tz::{TimeZone, TimeZoneDatabase};
 use serde::Deserialize;
 use thiserror::Error;
+use time::{OffsetDateTime, PrimitiveDateTime, UtcOffset, format_description::well_known::Rfc3339};
+
+fn parse_utc(value: &str) -> Option<OffsetDateTime> {
+    let instant = OffsetDateTime::parse(value, &Rfc3339).ok()?;
+    (instant.offset() == UtcOffset::UTC).then_some(instant)
+}
+
+fn parse_local(value: &str) -> Option<jiff::civil::DateTime> {
+    let whole = time::macros::format_description!("[year]-[month]-[day]T[hour]:[minute]:[second]");
+    let fractional = time::macros::format_description!(
+        "[year]-[month]-[day]T[hour]:[minute]:[second].[subsecond]"
+    );
+    if PrimitiveDateTime::parse(value, whole).is_err()
+        && PrimitiveDateTime::parse(value, fractional).is_err()
+    {
+        return None;
+    }
+    value.parse().ok()
+}
+
+fn parse_zone(value: &str) -> Option<TimeZone> {
+    static DATABASE: OnceLock<TimeZoneDatabase> = OnceLock::new();
+    let zone = DATABASE
+        .get_or_init(TimeZoneDatabase::bundled)
+        .get(value)
+        .ok()?;
+    (zone.iana_name() == Some(value)).then_some(zone)
+}
 
 #[cfg(feature = "experimental-local-http")]
 pub mod local_http;
@@ -40,16 +68,19 @@ impl Event {
         let (Some(local), Some(zone)) = (&self.local_starts_at, &self.time_zone) else {
             return TimeConsistency::Unverifiable;
         };
-        let Ok(instant) = DateTime::parse_from_rfc3339(&self.starts_at) else {
+        let Some(instant) = parse_utc(&self.starts_at) else {
             return TimeConsistency::Invalid;
         };
-        let Ok(local) = NaiveDateTime::parse_from_str(local, "%Y-%m-%dT%H:%M:%S%.f") else {
+        let Some(local) = parse_local(local) else {
             return TimeConsistency::Invalid;
         };
-        let Ok(zone) = zone.parse::<Tz>() else {
+        let Some(zone) = parse_zone(zone) else {
             return TimeConsistency::Invalid;
         };
-        if instant.with_timezone(&zone).naive_local() == local {
+        let Ok(timestamp) = jiff::Timestamp::from_nanosecond(instant.unix_timestamp_nanos()) else {
+            return TimeConsistency::Invalid;
+        };
+        if timestamp.to_zoned_datetime(zone).datetime() == local {
             TimeConsistency::Consistent
         } else {
             TimeConsistency::Inconsistent
@@ -57,21 +88,18 @@ impl Event {
     }
 
     fn has_valid_times(&self) -> bool {
-        let Ok(instant) = DateTime::parse_from_rfc3339(&self.starts_at) else {
-            return false;
-        };
-        if instant.offset().local_minus_utc() != 0 {
+        if parse_utc(&self.starts_at).is_none() {
             return false;
         }
-        if let Some(local) = &self.local_starts_at {
-            if NaiveDateTime::parse_from_str(local, "%Y-%m-%dT%H:%M:%S%.f").is_err() {
-                return false;
-            }
+        if let Some(local) = &self.local_starts_at
+            && parse_local(local).is_none()
+        {
+            return false;
         }
-        if let Some(zone) = &self.time_zone {
-            if zone.parse::<Tz>().is_err() {
-                return false;
-            }
+        if let Some(zone) = &self.time_zone
+            && parse_zone(zone).is_none()
+        {
+            return false;
         }
         true
     }
@@ -109,8 +137,12 @@ pub enum PageError {
 
 /// The caller supplies a transport. No production network implementation is included.
 pub trait Transport {
-    fn get_page(&mut self, cursor: Option<&str>) -> Result<Response, ()>;
+    fn get_page(&mut self, cursor: Option<&str>) -> Result<Response, TransportError>;
 }
+
+#[derive(Debug, Error)]
+#[error("transport failed")]
+pub struct TransportError;
 
 pub struct Response {
     pub status: u16,
@@ -222,10 +254,10 @@ impl Collector {
         if page.data.len() > 100 {
             return Err(PageError::TooManyEvents);
         }
-        if let Some(cursor) = &page.next_cursor {
-            if cursor.trim().is_empty() || cursor.len() > 4096 || self.cursors.contains(cursor) {
-                return Err(PageError::InvalidCursor);
-            }
+        if let Some(cursor) = &page.next_cursor
+            && (cursor.trim().is_empty() || cursor.len() > 4096 || self.cursors.contains(cursor))
+        {
+            return Err(PageError::InvalidCursor);
         }
         let mut page_ids = HashSet::new();
         for event in &page.data {
@@ -283,9 +315,9 @@ mod tests {
     }
 
     impl Transport for FakeTransport {
-        fn get_page(&mut self, cursor: Option<&str>) -> Result<Response, ()> {
+        fn get_page(&mut self, cursor: Option<&str>) -> Result<Response, TransportError> {
             self.cursors.push(cursor.map(str::to_owned));
-            self.responses.pop_front().ok_or(())
+            self.responses.pop_front().ok_or(TransportError)
         }
     }
 
@@ -545,6 +577,41 @@ mod tests {
     }
 
     #[test]
+    fn accepts_only_zero_offsets_for_utc_instants() {
+        for instant in [
+            "2026-11-16T00:00:00Z",
+            "2026-11-16T00:00:00+00:00",
+            "2026-11-16T00:00:00-00:00",
+        ] {
+            let mut page: Page = serde_json::from_str(FIXTURE).unwrap();
+            page.data[0].starts_at = instant.into();
+            assert_eq!(page.data[0].time_consistency(), TimeConsistency::Consistent);
+        }
+        for instant in [
+            "2026-11-15T21:00:00-03:00",
+            "2026-11-16T01:00:00+01:00",
+            "2026-11-16T00:00:00",
+        ] {
+            let mut page: Page = serde_json::from_str(FIXTURE).unwrap();
+            page.data[0].starts_at = instant.into();
+            assert_eq!(page.data[0].time_consistency(), TimeConsistency::Invalid);
+        }
+    }
+
+    #[test]
+    fn rejects_timezone_offsets_in_local_civil_time() {
+        for local in [
+            "2026-11-15T21:00:00Z",
+            "2026-11-15T21:00:00-03:00",
+            "2026-11-15T21:00:00+00:00",
+        ] {
+            let mut page: Page = serde_json::from_str(FIXTURE).unwrap();
+            page.data[0].local_starts_at = Some(local.into());
+            assert_eq!(page.data[0].time_consistency(), TimeConsistency::Invalid);
+        }
+    }
+
+    #[test]
     fn compares_utc_to_local_across_date_boundary_without_changing_confidence() {
         let mut page: Page = serde_json::from_str(FIXTURE).unwrap();
         assert_eq!(page.data[0].time_consistency(), TimeConsistency::Consistent);
@@ -585,6 +652,19 @@ mod tests {
         }
         page.data[0].starts_at = "invalid".into();
         assert_eq!(page.data[0].time_consistency(), TimeConsistency::Invalid);
+    }
+
+    #[test]
+    fn accepts_utc_and_iana_alias_from_bundled_timezone_database() {
+        let mut page: Page = serde_json::from_str(FIXTURE).unwrap();
+        page.data[0].time_zone = Some("UTC".into());
+        page.data[0].local_starts_at = Some("2026-11-16T00:00:00".into());
+        assert_eq!(page.data[0].time_consistency(), TimeConsistency::Consistent);
+
+        page.data[0].time_zone = Some("US/Eastern".into());
+        page.data[0].starts_at = "2026-11-01T05:30:00Z".into();
+        page.data[0].local_starts_at = Some("2026-11-01T01:30:00".into());
+        assert_eq!(page.data[0].time_consistency(), TimeConsistency::Consistent);
     }
 
     #[test]
