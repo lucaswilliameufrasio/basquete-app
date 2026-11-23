@@ -92,7 +92,7 @@ struct ContentView: View {
                             }
                         }
                     } footer: {
-                        Text("Fonte: TheSportsDB. A consulta gratuita mostra até 3 jogos por data; a lista pode estar incompleta. Horários em UTC.")
+                        Text("Fonte: TheSportsDB. A consulta gratuita mostra até 3 jogos por data; a lista pode estar incompleta. Horários no fuso do dispositivo.")
                             .foregroundStyle(JirauTheme.textSecondary)
                     }
                 }
@@ -164,6 +164,7 @@ struct ContentView: View {
 }
 
 private struct GameCard: View {
+    @Environment(\.timeZone) private var timeZone
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     let game: Game
     let favorites: Favorites
@@ -207,8 +208,9 @@ private struct GameCard: View {
             }
             Divider()
             if game.homeScore == nil || game.awayScore == nil {
-                if let time = game.time, !time.isEmpty {
-                    Text("\(String(time.prefix(5))) UTC").font(.subheadline)
+                if let start = game.localStart(timeZone: timeZone) {
+                    Text(start.instant, format: localStartFormat(changesDay: start.changesDay))
+                        .font(.subheadline)
                 } else {
                     Text("Horário não informado").font(.subheadline)
                 }
@@ -231,6 +233,15 @@ private struct GameCard: View {
                 .foregroundStyle(JirauTheme.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
+    }
+
+    private func localStartFormat(changesDay: Bool) -> Date.FormatStyle {
+        var format = Date.FormatStyle(
+            date: changesDay ? .abbreviated : .omitted,
+            time: .shortened
+        )
+        format.timeZone = timeZone
+        return format
     }
 }
 

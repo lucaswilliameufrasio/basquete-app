@@ -2,6 +2,26 @@ import XCTest
 @testable import BasqueteApp
 
 final class GameFeedTests: XCTestCase {
+    func testLocalStartConvertsUtcAndDetectsDateRollover() throws {
+        let game = Game(
+            id: "1", home: "Casa", away: "Visitante", homeTeamID: nil, awayTeamID: nil,
+            league: "NBB", date: "2026-12-02", time: "22:30:00",
+            homeScore: nil, awayScore: nil, status: nil
+        )
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try XCTUnwrap(TimeZone(identifier: "America/Sao_Paulo"))
+        let brazil = try XCTUnwrap(game.localStart(timeZone: calendar.timeZone))
+        XCTAssertEqual(calendar.component(.hour, from: brazil.instant), 19)
+        XCTAssertEqual(calendar.component(.minute, from: brazil.instant), 30)
+        XCTAssertFalse(brazil.changesDay)
+
+        calendar.timeZone = try XCTUnwrap(TimeZone(identifier: "Asia/Tokyo"))
+        let japan = try XCTUnwrap(game.localStart(timeZone: calendar.timeZone))
+        XCTAssertEqual(calendar.component(.day, from: japan.instant), 3)
+        XCTAssertEqual(calendar.component(.hour, from: japan.instant), 7)
+        XCTAssertTrue(japan.changesDay)
+    }
+
     func testRequestIncludesDateAndSport() async throws {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [StubProtocol.self]

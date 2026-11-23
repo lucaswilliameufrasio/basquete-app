@@ -42,6 +42,26 @@ struct Game: Decodable, Identifiable {
         default: "Status não informado"
         }
     }
+
+    func localStart(timeZone: TimeZone) -> (instant: Date, changesDay: Bool)? {
+        guard let time, !time.isEmpty else {
+            return nil
+        }
+        let parser = DateFormatter()
+        parser.locale = Locale(identifier: "en_US_POSIX")
+        parser.calendar = Calendar(identifier: .gregorian)
+        parser.timeZone = .gmt
+        parser.dateFormat = time.count == 5 ? "yyyy-MM-dd HH:mm" : "yyyy-MM-dd HH:mm:ss"
+        let input = "\(date) \(time)"
+        guard let instant = parser.date(from: input), parser.string(from: instant) == input else {
+            return nil
+        }
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = .gmt
+        let utcDay = calendar.component(.day, from: instant)
+        calendar.timeZone = timeZone
+        return (instant, calendar.component(.day, from: instant) != utcDay)
+    }
 }
 
 struct GameResponse: Decodable {
